@@ -119,10 +119,16 @@ final class SweepModel {
     }
     @ObservationIgnored var onNotice: () -> Void = {}
     var weeklyCheck = UserDefaults.standard.object(forKey: "weeklyCheck") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(weeklyCheck, forKey: "weeklyCheck"); onWeeklyChange() }
+        didSet {
+            UserDefaults.standard.set(weeklyCheck, forKey: "weeklyCheck"); onWeeklyChange()
+            if !weeklyCheck { reclaimNotice = nil }          // no check, no dot that can never refresh
+        }
     }
     var weeklyGB = UserDefaults.standard.object(forKey: "weeklyGB") as? Int ?? 10 {
-        didSet { UserDefaults.standard.set(weeklyGB, forKey: "weeklyGB") }
+        didSet {
+            UserDefaults.standard.set(weeklyGB, forKey: "weeklyGB")
+            if let n = reclaimNotice, !Weekly.shouldNotify(n, thresholdGB: weeklyGB) { reclaimNotice = nil }
+        }
     }
     @ObservationIgnored var onWeeklyChange: () -> Void = {}
     /// Window entrance (driven by the app on open) and first-show row stagger.
@@ -188,6 +194,7 @@ final class SweepModel {
         let cutoff = Date().addingTimeInterval(-Self.olderThanDays * 86400)
         message = nil
         selected = Set(items.filter { !$0.permanent && $0.modified < cutoff && $0.selectable() && (filter == nil || Category.of($0.kind) == filter) }.map(\.id))
+        if selected.isEmpty { message = "Nothing older than 30 days." }
         refresh()
     }
 
@@ -245,7 +252,8 @@ final class SweepModel {
         guard !scanning else { return }
         message = nil; failures = []; selected = []; items = []; confirmation = nil; filter = nil; cachedAt = nil; dockerSeen = false
         phase = .scanning; status = "Starting"; refresh()
-        let cfg = ScanConfig(roots: roots), feed = ScanFeed()
+        var cfg = ScanConfig(roots: roots); let feed = ScanFeed()
+        if CommandLine.arguments.contains("-demo") { cfg.includeGlobal = false; cfg.xcrun = nil }   // filming: only the chosen folders, nothing from ~/Library
         Perf.scanStarted()
         task = Task { await runScan(cfg, feed) }
     }

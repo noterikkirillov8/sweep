@@ -158,15 +158,24 @@ final class SweepApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateNotice() { statusItem?.button?.image = Self.statusImage(dot: model.reclaimNotice != nil) }
 
     /// Once a week, when power and idle time allow: a read-only scan. The result only ever sets the dot.
+    /// The next run is a week after the last one (saved), so relaunching never restarts the countdown.
     private func updateWeekly() {
         weekly?.invalidate(); weekly = nil
         guard model.weeklyCheck else { return }
+        let last = UserDefaults.standard.object(forKey: Weekly.lastRunKey) as? Date
         let a = NSBackgroundActivityScheduler(identifier: "com.erikkirillov.Sweep.weekly")
-        a.repeats = true; a.interval = Weekly.interval; a.tolerance = 24 * 3600; a.qualityOfService = .background
+        a.repeats = false; a.interval = max(3600, Weekly.delay(lastRun: last)); a.tolerance = 3600; a.qualityOfService = .background
+        nonisolated(unsafe) let scheduler = a
         a.schedule { [weak self] completion in
             guard Weekly.ready(power: Weekly.powerStatus(), idleSeconds: Weekly.idleSeconds()) else { completion(.deferred); return }
-            let bytes = Weekly.reclaimable(ScanConfig(roots: SweepModel.savedRoots()))
-            Task { @MainActor in self?.model.weeklyResult(bytes); completion(.finished) }
+            var cfg = ScanConfig(roots: SweepModel.savedRoots())
+            cfg.shouldStop = { scheduler.shouldDefer || !Weekly.ready(power: Weekly.powerStatus(), idleSeconds: Weekly.idleSeconds()) }
+            guard let bytes = Weekly.reclaimable(cfg) else { completion(.deferred); return }
+            Task { @MainActor in
+                UserDefaults.standard.set(Date(), forKey: Weekly.lastRunKey)
+                self?.model.weeklyResult(bytes); completion(.finished)
+                self?.updateWeekly()                          // next week
+            }
         }
         weekly = a
     }

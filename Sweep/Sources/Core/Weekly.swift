@@ -6,6 +6,14 @@ import IOKit.ps
 enum Weekly {
     static let interval: TimeInterval = 7 * 86400
 
+    static let lastRunKey = "weeklyLastRun"
+
+    /// Seconds until the next check is due: a full week after the last one, never restarted by a relaunch.
+    static func delay(lastRun: Date?, now: Date = Date()) -> TimeInterval {
+        guard let lastRun else { return interval }
+        return min(interval, max(0, interval - now.timeIntervalSince(lastRun)))
+    }
+
     static func ready(power: (onAC: Bool, batteryPercent: Double?), idleSeconds: Double) -> Bool {
         idleSeconds > 300 && (power.onAC || (power.batteryPercent ?? 0) >= 50)
     }
@@ -29,8 +37,9 @@ enum Weekly {
     static func idleSeconds() -> Double { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) }
 
     /// Same numbers a manual scan would show as reclaimable: sized folders not in use, plus Docker when it answers.
-    static func reclaimable(_ cfg: ScanConfig, dockerPath: String = ProcessInfo.processInfo.environment["PATH"] ?? "", dockerExtra: [String] = Docker.extraDirs) -> Int64 {
-        let folders = Scanner.find(cfg).filter { $0.selectable(now: cfg.now) }.reduce(Int64(0)) { $0 + ($1.size ?? Scanner.size(of: $1.urls)) }
+    static func reclaimable(_ cfg: ScanConfig, dockerPath: String = ProcessInfo.processInfo.environment["PATH"] ?? "", dockerExtra: [String] = Docker.extraDirs) -> Int64? {
+        let folders = Scanner.find(cfg).filter { $0.selectable(now: cfg.now) }.reduce(Int64(0)) { cfg.shouldStop() ? $0 : $0 + ($1.size ?? Scanner.size(of: $1.urls)) }
+        if cfg.shouldStop() { return nil }                  // told to defer: a partial total must not set or clear the dot
         let docker = Docker.items(path: dockerPath, extra: dockerExtra)?.reduce(Int64(0)) { $0 + ($1.size ?? 0) } ?? 0
         return folders + docker
     }

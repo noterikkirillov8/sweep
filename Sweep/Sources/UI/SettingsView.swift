@@ -52,7 +52,10 @@ struct SettingsView: View {
         KitSection {
             KitToggleRow(title: "Offer to free space right away", isOn: $model.offerFreeSpace)
             KitToggleRow(title: "Launch at login", isOn: $login)
-                .onChange(of: login) { _, on in try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()) }
+                .onChange(of: login) { _, on in
+                    do { try (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()) }
+                    catch { login = SMAppService.mainApp.status == .enabled }      // show what really happened
+                }
             KitRow(title: "Open Sweep", detail: "Global shortcut for the window") { KitHotKeyField(hotKey: $hotKey) }
             KitRow(title: "Intro") { Button("Show intro") { SettingsController.shared.onIntro() }.buttonStyle(.kitSecondary) }
         }

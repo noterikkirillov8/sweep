@@ -84,7 +84,7 @@ enum SelfTest {
         file("\(P)/web/.next/cache/x", bytes: 10_000); file("\(P)/web/.nuxt/x"); file("\(P)/web/.turbo/x")
         file("\(P)/web/.parcel-cache/x"); file("\(P)/web/.svelte-kit/x"); file("\(P)/web/.angular/cache/x")
         file("\(P)/swiftpkg/Package.swift"); file("\(P)/swiftpkg/.build/x", bytes: 5_000)
-        file("\(P)/swiftpkg/DerivedData/x")
+        file("\(P)/swiftpkg/DerivedData/App-abcdefgh/Build/x")
         file("\(P)/py/.venv/pyvenv.cfg"); file("\(P)/py/venv/pyvenv.cfg")
         file("\(P)/py/a/__pycache__/x.pyc"); file("\(P)/py/b/__pycache__/y.pyc")
         file("\(P)/rust/Cargo.toml"); file("\(P)/rust/target/x", bytes: 8_000)
@@ -99,6 +99,7 @@ enum SelfTest {
         file("\(P)/trap5/venv/x")                                      // venv without pyvenv.cfg
         file("\(P)/trap6/.gitignore", "/build\n"); file("\(P)/trap6/sub/build/x")   // anchored: only top-level
         dir("big/inside"); file("big/inside/huge", bytes: 1_000_000)
+        file("\(P)/trap9/DerivedData/notes.txt"); file("\(P)/trap10/DerivedData/My-Docs/readme.txt")   // user folders named DerivedData
         file("\(P)/trap7/package.json")
         try? fm.createSymbolicLink(at: root.appendingPathComponent("trap7/node_modules"), withDestinationURL: base.appendingPathComponent("big"))
         try? fm.createSymbolicLink(at: root.appendingPathComponent("trap8"), withDestinationURL: base.appendingPathComponent("big"))
@@ -163,6 +164,16 @@ enum SelfTest {
         check(found.first { $0.display == "fresh/node_modules" }?.inUse() == true, "fresh node_modules flagged in use")
         check(found.first { $0.display == "web/node_modules" }?.inUse() == false, "old node_modules not in use")
         let model = SweepModel()
+        let savedGB = model.weeklyGB, savedCheck = model.weeklyCheck, savedNotice = model.reclaimNotice
+        model.weeklyGB = 10; model.reclaimNotice = 12_000_000_000
+        model.weeklyGB = 20
+        check(model.reclaimNotice == nil, "weekly: raising the limit clears a dot that no longer qualifies")
+        model.reclaimNotice = 12_000_000_000; model.weeklyCheck = false
+        check(model.reclaimNotice == nil, "weekly: turning the check off clears the dot")
+        model.weeklyGB = savedGB; model.weeklyCheck = savedCheck; model.reclaimNotice = savedNotice
+        model.setItemsForQA([]); model.selectOlder()
+        check(model.message == "Nothing older than 30 days." && model.selected.isEmpty, "select older says so when nothing qualifies")
+        model.message = nil
         model.setItemsForQA(found); model.selectOlder()
         let older = Set(model.selectedItems.map(\.display))
         check(Scanner.mtime(root.appendingPathComponent("fresh/node_modules")) < Date().addingTimeInterval(-30 * 86400)
@@ -236,10 +247,17 @@ enum SelfTest {
 
         // Weekly check
         check(Weekly.shouldNotify(10_000_000_000, thresholdGB: 10) && !Weekly.shouldNotify(9_999_999_999, thresholdGB: 10) && !Weekly.shouldNotify(99, thresholdGB: 0), "weekly: dot only at or above the threshold")
-        let wk = Weekly.reclaimable(ScanConfig(roots: [root], home: home, now: Date(), includeGlobal: false), dockerPath: bin.path, dockerExtra: [])
+        let wk = Weekly.reclaimable(ScanConfig(roots: [root], home: home, now: Date(), includeGlobal: false), dockerPath: bin.path, dockerExtra: []) ?? -1
         let oldFolders = found.filter { !$0.inUse() && !$0.urls.isEmpty && !$0.display.hasPrefix("home") && $0.project != Scanner.globalGroup && Scanner.exists($0.urls[0]) }
         let dockerBytes: Int64 = 1_400_000_000 + 2_500_000_000 + 10_000_000 + 12_000_000
         check(wk >= dockerBytes && wk < dockerBytes + 2_000_000 && oldFolders.count > 0, "weekly: folder sizes plus docker, in-use and global caches left out (\(wk))")
+        let wnow = Date()
+        check(Weekly.delay(lastRun: nil, now: wnow) == Weekly.interval && Weekly.delay(lastRun: wnow.addingTimeInterval(-2 * 86400), now: wnow) == 5 * 86400
+              && Weekly.delay(lastRun: wnow.addingTimeInterval(-9 * 86400), now: wnow) == 0 && Weekly.delay(lastRun: wnow.addingTimeInterval(86400), now: wnow) == Weekly.interval,
+              "weekly: next run is a week after the last, not after launch")
+        var stopped = ScanConfig(roots: [root], home: home, now: Date(), includeGlobal: false)
+        stopped.shouldStop = { true }
+        check(Weekly.reclaimable(stopped, dockerPath: bin.path, dockerExtra: []) == nil && Scanner.find(stopped).isEmpty, "weekly: a deferred scan stops and reports nothing")
         introFlowChecks { check($0, $1) }
         print(failed == 0 ? "ALL PASSED" : "\(failed) FAILED")
         return failed == 0 ? 0 : 1

@@ -28,6 +28,8 @@ struct ScanConfig: Sendable {
     var includeGlobal = true
     var xcrun: String? = XcodeLeftovers.xcrun
     var git: AgentDisk.Query = AgentDisk.git
+    /// Polled while walking; the weekly check uses it to stop when the system asks it to defer.
+    var shouldStop: @Sendable () -> Bool = { false }
 }
 
 /// Lock-protected mailbox between the background scan and the UI: the walker pushes finds and the
@@ -110,7 +112,7 @@ enum Scanner {
     }
 
     private static func walk(_ dir: URL, root: URL, depth: Int, cfg: ScanConfig, projectDate: Date? = nil, out: inout [String: Found], pycache: inout [String: Found], feed: ScanFeed?) {
-        if Task.isCancelled || depth > maxDepth { return }
+        if Task.isCancelled || cfg.shouldStop() || depth > maxDepth { return }
         if historyPaths.contains(where: { let path = cfg.home.appendingPathComponent($0).path; return dir.path == path || dir.path.hasPrefix(path + "/") }) { return }
         feed?.visit(dir.path)
         guard let kids = try? FileManager.default.contentsOfDirectory(
@@ -162,7 +164,8 @@ enum Scanner {
             case ".build":
                 if names.contains("Package.swift") { add("SwiftPM .build") }
                 continue
-            case "DerivedData": add("DerivedData"); continue
+            case "DerivedData":
+                if looksLikeDerivedData(url) { add("DerivedData"); continue }
             case ".venv", "venv":
                 if exists(url.appendingPathComponent("pyvenv.cfg")) { add("Python venv"); continue }
             case "__pycache__":
@@ -192,6 +195,15 @@ enum Scanner {
             default: break
             }
             walk(url, root: root, depth: depth + 1, cfg: cfg, projectDate: activity, out: &out, pycache: &pycache, feed: feed)
+        }
+    }
+
+    /// Xcode's DerivedData holds `<Name>-<hash>` folders with a Build folder or an info.plist; a user folder of that name does not.
+    static func looksLikeDerivedData(_ url: URL) -> Bool {
+        let kids = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+        return kids.contains { kid in
+            guard kid.lastPathComponent.contains("-"), isRealDirectory(kid) else { return false }
+            return isRealDirectory(kid.appendingPathComponent("Build")) || exists(kid.appendingPathComponent("info.plist"))
         }
     }
 
